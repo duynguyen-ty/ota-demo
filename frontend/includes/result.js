@@ -613,9 +613,12 @@ class SearchPage extends React.Component {
     error: null,
     filterCity: "",
     filterCountry: "",
+    filterCityLat: null,
+    filterCityLon: null,
 
     filterLat: null,
     filterLon: null,
+    filterRadius: null,
 
     filterCategories: [],
     filterTrips: [],
@@ -635,6 +638,7 @@ class SearchPage extends React.Component {
     selectedHotelId: null,
     centerLat: null,
     centerLon: null,
+    zoom: 13,
   }
 
   fetchSearchParamsInUrl = () => {
@@ -766,13 +770,23 @@ class SearchPage extends React.Component {
   }
 
   addMarkers = (hotels) => {
-    this.setState({ newHotels: hotels})
+    this.setState({newHotels: hotels});
   }
 
   buildAndStoreSearchUrl = () => {
     const { filterCountry, filterCity, filterCategories, filterOccasions } = this.state;
-    var url = `country=${filterCountry}&city=${filterCity}`;
+    var url = '';
     var browserUrl = url;
+
+    var countryCityUrl = `country=${filterCountry}&city=${filterCity}`;
+
+    if (this.state.filterLat != null && this.state.filterLon != null && this.state.filterRadius != null) {
+      url = `lat=${this.state.filterLat}&long=${this.state.filterLon}&radius=${this.state.filterRadius}`;
+      browserUrl = countryCityUrl;
+    } else {
+      url = countryCityUrl;
+      browserUrl = url;
+    }
 
     filterCategories.forEach(function(category) {
       url = `${url}&categories=${JSON.parse(category).category_id}`;
@@ -817,8 +831,8 @@ class SearchPage extends React.Component {
         // Update mapbox
         if (coordinates) {
           this.setState({
-            filterLat: coordinates.lat,
-            filterLon: coordinates.lon
+            filterCityLat: coordinates.lat,
+            filterCityLon: coordinates.lon
           })
         }
 
@@ -851,12 +865,13 @@ class SearchPage extends React.Component {
   fetchLocationCoordinates() {
     /**
      * Get the coordinates of the city.
-     *
+     * TODO Check me: Only return selected cordinate without rerender
      */
-    const { filterCountry, filterCity, isLoadingMore } = this.state
+    const { filterCountry, filterCity, isLoadingMore, filterRadius } = this.state
 
-    if (isLoadingMore) {
+    if (isLoadingMore || filterRadius != null) {
       // Loading more means location is not changed, ignore the fetch
+      // Filter by lat/lon/radius, ignore the fetch
       return Promise.resolve(null);
     }
     const coordinateUrl = `https://nominatim.openstreetmap.org/search?q=${filterCity},${filterCountry}&format=json&polygon=1&addressdetails=1`;
@@ -956,6 +971,33 @@ class SearchPage extends React.Component {
     }
   }
 
+  handleMapMoved = (data) => {
+    if (data.lat === this.state.filterLat
+      && data.lon === this.state.filterLon
+      && data.radius === this.state.filterRadius) {
+      return;
+    }
+
+    this.setState({
+      filterLat: data.lat,
+      filterLon: data.lon,
+      filterRadius: data.radius,
+      zoom: data.zoom,
+      currentPage: 0, // Reset search
+    }, () => {
+      if (this.state.isLoadingHotel) {
+        return;
+      }
+      if (data.zoom >= 13 && data.zoom <= 16) {
+        this.fetchHotels(false);
+      } else {
+        console.log("Please zoom in to search");
+        // TODO Add warning message
+        removeCenterMarker();
+      }
+    });
+  }
+
   render() {
     return <>
       <SearchHeader
@@ -987,14 +1029,20 @@ class SearchPage extends React.Component {
         {this.state.isLoadingHotel && !this.state.isLoadingMore && <Loader itemCount={3} />}
 
         <MapContainer
+          currentPage={this.state.currentPage}
           newHotels={this.state.newHotels}
-          lat={this.state.filterLat}
-          lon={this.state.filterLon}
+          lat={this.state.filterCityLat}
+          lon={this.state.filterCityLon}
+          filterLat={this.state.filterLat}
+          filterLon={this.state.filterLon}
+          filterRadius={this.state.filterRadius}
+          zoom={this.state.zoom}
           isStaleMap={this.state.isLoadingHotel && !this.state.isLoadingMore}
           centerLat={this.state.centerLat}
           centerLon={this.state.centerLon}
           selectedHotelId={this.state.selectedHotelId}
           isMapFloating={this.state.isMapFloating}
+          onMapMoved={this.handleMapMoved}
         />
       </main>
 

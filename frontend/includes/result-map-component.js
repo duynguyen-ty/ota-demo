@@ -1,10 +1,27 @@
 class MapContainer extends React.Component {
+    state = {
+        showRadiusCircle: false,
+    };
+
     componentDidUpdate(prevProps) {
         if (prevProps.lat !== this.props.lat || prevProps.lon !== this.props.lon
-            || (prevProps.isStaleMap !== this.props.isStaleMap && this.props.isStaleMap)) {
-            RESULT_MAP = buildMap(this.props.lat, this.props.lon);
-            RESULT_MAP.on('zoomend', () => this.mapChanged());
-            RESULT_MAP.on('dragend', () => this.mapChanged());
+            || (prevProps.isStaleMap !== this.props.isStaleMap && this.props.isStaleMap)
+        ) {
+            if (!RESULT_MAP) {
+                console.log("New map");
+                RESULT_MAP = buildMap(this.props.lat, this.props.lon, this.props.zoom);
+                RESULT_MAP.on('zoomend', () => this.mapChanged());
+                RESULT_MAP.on('dragend', () => this.mapChanged());
+            }
+            RESULT_MAP.panTo(new L.LatLng(this.props.lat, this.props.lon));
+            if (this.props.currentPage === 0) {
+                cleanMarkers();
+            }
+        }
+
+        if (this.props.filterRadius) {
+            this.showOrHideRadiusCicle();
+            RESULT_MAP.panTo(new L.LatLng(this.props.filterLat, this.props.filterLon));
         }
 
         if (prevProps.newHotels !== this.props.newHotels) {
@@ -26,13 +43,13 @@ class MapContainer extends React.Component {
     }
 
     mapChanged = () => {
-        // TODO Trigger search
         var coordinates = {
             lat: RESULT_MAP.getCenter().lat,
             lon: RESULT_MAP.getCenter().lng,
-            radis: 100,
+            radius: zoomToRadius(RESULT_MAP.getZoom()),
             zoom: RESULT_MAP.getZoom(),
-        }
+        };
+        this.props.onMapMoved(coordinates);
     }
 
     getMarkerPopup(hotel) {
@@ -47,12 +64,38 @@ class MapContainer extends React.Component {
         `;
     }
 
+    showOrHideRadiusCicle = () => {
+        if (this.state.showRadiusCircle) {
+            addCenterMarker(this.props.filterLat, this.props.filterLon, this.props.filterRadius);
+        } else {
+            removeCenterMarker();
+        }
+    }
+
+    handleRadiusCicleChange = (e) => {
+        console.log(e);
+        this.setState({
+            showRadiusCircle: !this.state.showRadiusCircle,
+        }, () => {
+            this.showOrHideRadiusCicle();
+        });
+    }
+
     render() {
         return (
             <div className={this.props.isMapFloating ? 'map-container-float' : 'map-container'}>
                 <section className="search-map" id="search-map"></section>
                 <div className="score-gradient">
                 Preference match: <img src="img/score-gradient.png" />
+                </div>
+                <div>
+                    <label>
+                        <input
+                            type="checkbox"
+                            defaultChecked={this.state.showRadiusCircle}
+                            onClick={this.handleRadiusCicleChange}
+                        /> Show radius circle
+                    </label>
                 </div>
             </div>
         )

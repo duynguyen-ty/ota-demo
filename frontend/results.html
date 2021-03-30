@@ -110,12 +110,29 @@ class SearchLocation extends React.Component {
   }
 }
       class MapContainer extends React.Component {
+    state = {
+        showRadiusCircle: false,
+    };
+
     componentDidUpdate(prevProps) {
         if (prevProps.lat !== this.props.lat || prevProps.lon !== this.props.lon
-            || (prevProps.isStaleMap !== this.props.isStaleMap && this.props.isStaleMap)) {
-            RESULT_MAP = buildMap(this.props.lat, this.props.lon);
-            RESULT_MAP.on('zoomend', () => this.mapChanged());
-            RESULT_MAP.on('dragend', () => this.mapChanged());
+            || (prevProps.isStaleMap !== this.props.isStaleMap && this.props.isStaleMap)
+        ) {
+            if (!RESULT_MAP) {
+                console.log("New map");
+                RESULT_MAP = buildMap(this.props.lat, this.props.lon, this.props.zoom);
+                RESULT_MAP.on('zoomend', () => this.mapChanged());
+                RESULT_MAP.on('dragend', () => this.mapChanged());
+            }
+            RESULT_MAP.panTo(new L.LatLng(this.props.lat, this.props.lon));
+            if (this.props.currentPage === 0) {
+                cleanMarkers();
+            }
+        }
+
+        if (this.props.filterRadius) {
+            this.showOrHideRadiusCicle();
+            RESULT_MAP.panTo(new L.LatLng(this.props.filterLat, this.props.filterLon));
         }
 
         if (prevProps.newHotels !== this.props.newHotels) {
@@ -137,13 +154,13 @@ class SearchLocation extends React.Component {
     }
 
     mapChanged = () => {
-        // TODO Trigger search
         var coordinates = {
             lat: RESULT_MAP.getCenter().lat,
             lon: RESULT_MAP.getCenter().lng,
-            radis: 100,
+            radius: zoomToRadius(RESULT_MAP.getZoom()),
             zoom: RESULT_MAP.getZoom(),
-        }
+        };
+        this.props.onMapMoved(coordinates);
     }
 
     getMarkerPopup(hotel) {
@@ -158,12 +175,38 @@ class SearchLocation extends React.Component {
         `;
     }
 
+    showOrHideRadiusCicle = () => {
+        if (this.state.showRadiusCircle) {
+            addCenterMarker(this.props.filterLat, this.props.filterLon, this.props.filterRadius);
+        } else {
+            removeCenterMarker();
+        }
+    }
+
+    handleRadiusCicleChange = (e) => {
+        console.log(e);
+        this.setState({
+            showRadiusCircle: !this.state.showRadiusCircle,
+        }, () => {
+            this.showOrHideRadiusCicle();
+        });
+    }
+
     render() {
         return (
             <div className={this.props.isMapFloating ? 'map-container-float' : 'map-container'}>
                 <section className="search-map" id="search-map"></section>
                 <div className="score-gradient">
                 Preference match: <img src="img/score-gradient.png" />
+                </div>
+                <div>
+                    <label>
+                        <input
+                            type="checkbox"
+                            defaultChecked={this.state.showRadiusCircle}
+                            onClick={this.handleRadiusCicleChange}
+                        /> Show radius circle
+                    </label>
                 </div>
             </div>
         )
@@ -784,9 +827,12 @@ class SearchPage extends React.Component {
     error: null,
     filterCity: "",
     filterCountry: "",
+    filterCityLat: null,
+    filterCityLon: null,
 
     filterLat: null,
     filterLon: null,
+    filterRadius: null,
 
     filterCategories: [],
     filterTrips: [],
@@ -806,6 +852,7 @@ class SearchPage extends React.Component {
     selectedHotelId: null,
     centerLat: null,
     centerLon: null,
+    zoom: 13,
   }
 
   fetchSearchParamsInUrl = () => {
@@ -937,13 +984,23 @@ class SearchPage extends React.Component {
   }
 
   addMarkers = (hotels) => {
-    this.setState({ newHotels: hotels})
+    this.setState({newHotels: hotels});
   }
 
   buildAndStoreSearchUrl = () => {
     const { filterCountry, filterCity, filterCategories, filterOccasions } = this.state;
-    var url = `country=${filterCountry}&city=${filterCity}`;
+    var url = '';
     var browserUrl = url;
+
+    var countryCityUrl = `country=${filterCountry}&city=${filterCity}`;
+
+    if (this.state.filterLat != null && this.state.filterLon != null && this.state.filterRadius != null) {
+      url = `lat=${this.state.filterLat}&long=${this.state.filterLon}&radius=${this.state.filterRadius}`;
+      browserUrl = countryCityUrl;
+    } else {
+      url = countryCityUrl;
+      browserUrl = url;
+    }
 
     filterCategories.forEach(function(category) {
       url = `${url}&categories=${JSON.parse(category).category_id}`;
@@ -988,8 +1045,8 @@ class SearchPage extends React.Component {
         // Update mapbox
         if (coordinates) {
           this.setState({
-            filterLat: coordinates.lat,
-            filterLon: coordinates.lon
+            filterCityLat: coordinates.lat,
+            filterCityLon: coordinates.lon
           })
         }
 
@@ -1022,12 +1079,13 @@ class SearchPage extends React.Component {
   fetchLocationCoordinates() {
     /**
      * Get the coordinates of the city.
-     *
+     * TODO Check me: Only return selected cordinate without rerender
      */
-    const { filterCountry, filterCity, isLoadingMore } = this.state
+    const { filterCountry, filterCity, isLoadingMore, filterRadius } = this.state
 
-    if (isLoadingMore) {
+    if (isLoadingMore || filterRadius != null) {
       // Loading more means location is not changed, ignore the fetch
+      // Filter by lat/lon/radius, ignore the fetch
       return Promise.resolve(null);
     }
     const coordinateUrl = `https://nominatim.openstreetmap.org/search?q=${filterCity},${filterCountry}&format=json&polygon=1&addressdetails=1`;
@@ -1127,6 +1185,33 @@ class SearchPage extends React.Component {
     }
   }
 
+  handleMapMoved = (data) => {
+    if (data.lat === this.state.filterLat
+      && data.lon === this.state.filterLon
+      && data.radius === this.state.filterRadius) {
+      return;
+    }
+
+    this.setState({
+      filterLat: data.lat,
+      filterLon: data.lon,
+      filterRadius: data.radius,
+      zoom: data.zoom,
+      currentPage: 0, // Reset search
+    }, () => {
+      if (this.state.isLoadingHotel) {
+        return;
+      }
+      if (data.zoom >= 13 && data.zoom <= 16) {
+        this.fetchHotels(false);
+      } else {
+        console.log("Please zoom in to search");
+        // TODO Add warning message
+        removeCenterMarker();
+      }
+    });
+  }
+
   render() {
     return <>
       <SearchHeader
@@ -1158,14 +1243,20 @@ class SearchPage extends React.Component {
         {this.state.isLoadingHotel && !this.state.isLoadingMore && <Loader itemCount={3} />}
 
         <MapContainer
+          currentPage={this.state.currentPage}
           newHotels={this.state.newHotels}
-          lat={this.state.filterLat}
-          lon={this.state.filterLon}
+          lat={this.state.filterCityLat}
+          lon={this.state.filterCityLon}
+          filterLat={this.state.filterLat}
+          filterLon={this.state.filterLon}
+          filterRadius={this.state.filterRadius}
+          zoom={this.state.zoom}
           isStaleMap={this.state.isLoadingHotel && !this.state.isLoadingMore}
           centerLat={this.state.centerLat}
           centerLon={this.state.centerLon}
           selectedHotelId={this.state.selectedHotelId}
           isMapFloating={this.state.isMapFloating}
+          onMapMoved={this.handleMapMoved}
         />
       </main>
 
@@ -1176,9 +1267,9 @@ class SearchPage extends React.Component {
 
 ReactDOM.render(<SearchPage />, document.getElementById('search-page'))
       // Init default map
-var RESULT_MAP = L.map('search-map').setView([48.1019351, 11.53698539037037], 13);
-
+var RESULT_MAP = null;
 var RESULT_MAP_MARKERS = [];
+var RESULT_CENTER_MARKER = null;
 
 const SCORE_DESCRIPTIONS = {
     "score_0": "Excellent",
@@ -1189,6 +1280,20 @@ const SCORE_DESCRIPTIONS = {
 }
 
 const SCORE_THRESHOLDS = [86.0, 80.0, 74.0, 68.0, 0.0];
+
+function removeCenterMarker() {
+    if (RESULT_CENTER_MARKER) {
+        RESULT_CENTER_MARKER.remove();
+    }
+}
+
+function addCenterMarker(lat, lon, radius) {
+    if (radius == null) {
+        return;
+    }
+    removeCenterMarker();
+    RESULT_CENTER_MARKER = L.circle([lat, lon], {radius: radius}).addTo(RESULT_MAP);
+}
 
 function applyThreshold(score) {
     for (const [index, value] of SCORE_THRESHOLDS.entries()) {
@@ -1213,7 +1318,7 @@ function getIcon(matchScore) {
     });
 }
 
-function buildMap(lat, lon) {
+function buildMap(lat, lon, zoom) {
     const mapConfig = {
         minZoom: 10,
         maxZoom: 16,
@@ -1222,7 +1327,7 @@ function buildMap(lat, lon) {
         RESULT_MAP.remove();
         RESULT_MAP_MARKERS = [];
     }
-    var map = L.map('search-map', mapConfig).setView([lat, lon], 13);
+    var map = L.map('search-map', mapConfig).setView([lat, lon], zoom);
 
     L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png', {
         attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
@@ -1237,7 +1342,6 @@ function markerOnClickHandler(e) {
 }
 
 function addMarker(tyId, matchScore, lat, lon, popupText) {
-
     if (!RESULT_MAP) {
         return;
     }
@@ -1252,13 +1356,41 @@ function addMarker(tyId, matchScore, lat, lon, popupText) {
         .on('click', markerOnClickHandler);
 }
 
-function cleanMarker(ty_id) {
-    if (RESULT_MAP && RESULT_MAP_MARKERS && RESULT_MAP_MARKERS.hasOwnProperty(ty_id)) {
-        // remove the marker
-        RESULT_MAP.removeLayer(RESULT_MAP_MARKERS[ty_id]);
+function cleanMarkers() {
+    for (var tyId in RESULT_MAP_MARKERS) {
+        if (RESULT_MAP_MARKERS.hasOwnProperty(tyId)) {
+            cleanMarker(tyId);
+        }
     }
 }
 
+function cleanMarker(tyId) {
+    if (RESULT_MAP && RESULT_MAP_MARKERS && RESULT_MAP_MARKERS.hasOwnProperty(tyId)) {
+        // remove the marker
+        RESULT_MAP.removeLayer(RESULT_MAP_MARKERS[tyId]);
+    }
+}
+
+function zoomToRadius(zoomLevel) {
+    // 13 => 4000
+    // 14 => 2000
+    // 15 => 1000
+    // 16 => 500
+    const baseLevel = 13;
+    const baseRadius = 4000;
+    const radiusStep = 2;
+
+    if (zoomLevel && !isNaN(parseInt(zoomLevel))) {
+      const intLevel = parseInt(zoomLevel);
+      if (intLevel == baseLevel) {
+        return baseRadius;
+      }
+      if (intLevel > baseLevel) {
+        return baseRadius/Math.pow(radiusStep, intLevel - baseLevel);
+      }
+    }
+    return null;
+  }
     </script>
     <script type="text/javascript" src="//ajax.googleapis.com/ajax/libs/jquery/3.4.1/jquery.min.js"></script>
     <script type="text/javascript" src="js/main.js"></script>
